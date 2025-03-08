@@ -1,0 +1,8 @@
+openai
+google-generativeai
+speechrecognition
+pyttsx3
+pyautogui
+keyboard
+selenium
+requests
