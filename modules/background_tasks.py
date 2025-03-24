@@ -1,84 +1,119 @@
+import json
 import time
 import threading
 import psutil
 import schedule
-import requests
-import speech_recognition as sr
-from datetime import datetime
+from datetime import datetime, timedelta
 from modules.speech import speak, listen
+import os
 
-# Initialize recognizer
-recognizer = sr.Recognizer()
+# ------------------------------
+# File Persistence for Reminders
+# ------------------------------
+REMINDER_FILE = "reminders.json"
 
-def monitor_system():
-    """Monitor CPU, RAM, and battery usage periodically."""
-    while True:
-        cpu_usage = psutil.cpu_percent(interval=5)
-        ram_usage = psutil.virtual_memory().percent
-        battery = psutil.sensors_battery()
-        battery_percent = battery.percent if battery else "N/A"
-        print(f"🔋 CPU: {cpu_usage}%, RAM: {ram_usage}%, Battery: {battery_percent}%")
-        time.sleep(60)  # Check every 60 seconds
+if not os.path.exists(REMINDER_FILE):
+    with open(REMINDER_FILE, "w") as f:
+        json.dump([], f)
 
-
-def fetch_news():
-    """Fetch latest news headlines."""
+# ------------------------------
+# 1. Reminder Management
+# ------------------------------
+def load_reminders():
+    """Load reminders from the JSON file. Returns an empty list if the file is missing or corrupted."""
     try:
-        response = requests.get("https://newsapi.org/v2/top-headlines?country=in&apiKey=YOUR_NEWS_API_KEY")
-        news_data = response.json()
-        headlines = [article['title'] for article in news_data['articles'][:3]]
-        speak("Here are the top news headlines:")
-        for headline in headlines:
-            print(f"📰 {headline}")
-            speak(headline)
-    except Exception as e:
-        print(f"⚠️ Error fetching news: {e}")
+        with open(REMINDER_FILE, "r") as file:
+            return json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
 
+def save_reminders(reminders):
+    """Save the reminders list back to the JSON file."""
+    with open(REMINDER_FILE, "w") as file:
+        json.dump(reminders, file, indent=4)
+
+def parse_time_str(time_str):
+    """
+    Parse user-input time formats into 24-hour format (HH:MM).
+    Acceptable formats:
+      - "10:52 PM", "10:52PM", "10:52 p.m."
+      - "22:52"
+    Returns formatted time as string or None if invalid.
+    """
+    normalized = time_str.strip().upper().replace('.', '')
+    possible_formats = ["%I:%M %p", "%I:%M%p", "%H:%M"]
+    for fmt in possible_formats:
+        try:
+            dt = datetime.strptime(normalized, fmt)
+            return dt.strftime("%H:%M")  # Convert to 24-hour format
+        except ValueError:
+            continue
+    return None
 
 def set_reminder(time_str, message):
-    """Set a reminder at a specific time."""
-    def reminder_task():
-        print(f"⏰ Reminder: {message}")
-        speak(f"Reminder: {message}")
-    schedule.every().day.at(time_str).do(reminder_task)
+    """
+    Set a reminder at a given time, store it in the reminders.json file, and schedule it.
+    """
+    formatted_time = parse_time_str(time_str)
+    if not formatted_time:
+        speak("Invalid time format. Please specify a valid format like '11:45 PM'.")
+        return
 
+    reminders = load_reminders()
+    reminders.append({"time": formatted_time, "message": message})
+    save_reminders(reminders)
 
-def background_listen():
-    """Continuously listen for a wake-up command."""
+    print(f"[Reminder] Reminder saved: {formatted_time} - {message}")
+
+    # Schedule the reminder task
+    schedule.every().day.at(formatted_time).do(trigger_reminder, message=message)
+    speak(f"Reminder set for {formatted_time}: {message}")
+
+def trigger_reminder(message):
+    """
+    Function that triggers the reminder and speaks it out.
+    """
+    speak(f"Reminder alert: {message}")
+    print(f"⏰ Reminder Triggered: {message}")
+
+    # Remove the reminder from the file after execution
+    reminders = load_reminders()
+    reminders = [rem for rem in reminders if rem["message"] != message]  # Remove executed reminder
+    save_reminders(reminders)
+
+def check_reminders():
+    """
+    Background thread to check reminders every 30 seconds.
+    If a reminder matches the current time, it is triggered and removed.
+    """
     while True:
-        print("🎤 Background listening...")
-        text = listen()
-        if "hey ai" in text.lower():
-            speak("Yes, I am here! How can I help?")
-        time.sleep(2)
+        now = datetime.now().strftime("%H:%M")
+        reminders = load_reminders()
+        remaining_reminders = []
 
+        for reminder in reminders:
+            if reminder["time"] == now:
+                trigger_reminder(reminder["message"])
+            else:
+                remaining_reminders.append(reminder)
 
-def auto_updates():
-    """Check for updates and sync data."""
-    while True:
-        print("🔄 Checking for AI updates...")
-        # Simulated update check
-        time.sleep(3600)  # Check every hour
+        save_reminders(remaining_reminders)
+        time.sleep(30)  # Check reminders every 30 seconds
 
-# Scheduling tasks
-schedule.every(30).minutes.do(fetch_news)
-schedule.every().hour.do(auto_updates)
+# ------------------------------
+# 2. Start Background Threads
+# ------------------------------
+def start_background_tasks():
+    """
+    Start background processes:
+      - Reminder Checker
+      - Scheduler Loop
+    """
+    threading.Thread(target=check_reminders, daemon=True).start()
+    threading.Thread(target=run_scheduler, daemon=True).start()
 
 def run_scheduler():
-    """Run scheduled tasks in the background."""
+    """Runs scheduled tasks in an infinite loop."""
     while True:
         schedule.run_pending()
         time.sleep(1)
-
-# Start all background tasks
-tasks = [
-    threading.Thread(target=monitor_system, daemon=True),
-    threading.Thread(target=background_listen, daemon=True),
-    threading.Thread(target=run_scheduler, daemon=True)
-]
-
-for task in tasks:
-    task.start()
-
-while True:
-    time.sleep(1)  # Keep the script running
