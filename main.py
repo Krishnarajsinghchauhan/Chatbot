@@ -8,7 +8,6 @@ from modules.brain import process_memory_command, answer_memory_query
 import threading
 
 def main():
-    # Start background tasks in a daemon thread
     threading.Thread(target=start_background_tasks, daemon=True).start()
 
     speak("Hello, how can I assist you today?")
@@ -18,13 +17,11 @@ def main():
             continue
         command = command.lower()
 
-        # Check if it's a memory-teaching command
         memory_response = process_memory_command(command)
         if memory_response:
             speak(memory_response)
             continue
 
-        # Check if it's a memory query
         memory_query = answer_memory_query(command)
         if memory_query:
             speak(memory_query)
