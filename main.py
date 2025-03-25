@@ -43,12 +43,10 @@ def main():
             search_google(query)
 
         elif "set reminder" in command or "remind me" in command:
-            # Expecting command like "remind me at 10:52 p.m. to call John"
             words = command.split()
             if "at" in words:
                 time_index = words.index("at") + 1
                 if time_index < len(words):
-                    # Capture time as two tokens (e.g., "10:52 p.m." may come as two tokens)
                     if len(words) > time_index + 1 and words[time_index+1] in ["am", "pm"]:
                         time_str = words[time_index] + " " + words[time_index+1]
                         message = " ".join(words[time_index+2:])
