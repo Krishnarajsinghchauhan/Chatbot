@@ -6,6 +6,8 @@ import schedule
 from datetime import datetime, timedelta
 from modules.speech import speak, listen
 import os
+import tkinter as tk
+from tkinter import messagebox
 
 # ------------------------------
 # File Persistence for Reminders
@@ -117,3 +119,90 @@ def run_scheduler():
     while True:
         schedule.run_pending()
         time.sleep(1)
+
+# ------------------------------
+# 3. Background Process Monitor
+# ------------------------------
+def get_unused_tasks(threshold_cpu=0.5, threshold_mem=10):
+    """
+    Get a list of processes using minimal CPU and memory.
+    - threshold_cpu: CPU usage below this threshold (%) is considered idle.
+    - threshold_mem: Memory usage below this threshold (MB) is considered idle.
+    """
+    unused_tasks = []
+    for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info']):
+        try:
+            cpu_usage = proc.info['cpu_percent']
+            mem_usage_mb = proc.info['memory_info'].rss / (1024 * 1024)
+
+            # Identify processes using low CPU and memory
+            if cpu_usage < threshold_cpu and mem_usage_mb < threshold_mem:
+                unused_tasks.append({"pid": proc.info['pid'], "name": proc.info['name']})
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    return unused_tasks
+
+def kill_process(pid):
+    """Kill a process by its PID."""
+    try:
+        proc = psutil.Process(pid)
+        proc.terminate()
+        print(f"[Task Manager] Process {proc.name()} (PID: {pid}) terminated successfully.")
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        print(f"[Task Manager] Unable to terminate process PID: {pid}")
+
+def show_task_popup(unused_tasks):
+    """
+    Generate a pop-up asking the user if they want to kill unused tasks.
+    """
+    if not unused_tasks:
+        return  # No unused tasks to notify about
+
+    def on_confirm():
+        """Terminate selected tasks on confirmation."""
+        for task in unused_tasks:
+            kill_process(task['pid'])
+        messagebox.showinfo("Task Manager", "Unused tasks terminated successfully!")
+        root.destroy()
+
+    def on_cancel():
+        """Ignore the unused tasks."""
+        messagebox.showinfo("Task Manager", "No changes made. Unused tasks ignored.")
+        root.destroy()
+
+    # Create pop-up window
+    root = tk.Tk()
+    root.withdraw()  # Hide root window
+
+    task_list = "\n".join([f"{task['name']} (PID: {task['pid']})" for task in unused_tasks])
+    response = messagebox.askyesno(
+        "Task Manager Alert",
+        f"The following unused tasks are detected:\n\n{task_list}\n\nDo you want to terminate them?"
+    )
+
+    if response:
+        on_confirm()
+    else:
+        on_cancel()
+
+def monitor_unused_tasks(interval=60):
+    """
+    Monitor and identify unused tasks every 'interval' seconds.
+    """
+    while True:
+        unused_tasks = get_unused_tasks()
+        if unused_tasks:
+            show_task_popup(unused_tasks)
+        time.sleep(interval)
+
+# ------------------------------
+# 4. Start Task Monitor in Background
+# ------------------------------
+def start_task_monitor():
+    """
+    Start the unused task monitoring in the background.
+    """
+    threading.Thread(target=monitor_unused_tasks, daemon=True).start()
+

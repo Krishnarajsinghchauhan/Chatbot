@@ -2,7 +2,7 @@ from modules.ai_chat import chat_with_ai
 from modules.speech import listen, speak
 from modules.pc_control import open_app, close_app
 from modules.browser import search_google
-from modules.background_tasks import start_background_tasks, set_reminder, get_system_usage, load_reminders, save_reminders
+from modules.background_tasks import start_background_tasks, set_reminder, load_reminders, save_reminders, start_task_monitor
 from datetime import datetime
 from modules.brain import process_memory_command, answer_memory_query
 import threading
@@ -10,6 +10,9 @@ import threading
 def main():
     # Start background tasks in a daemon thread
     threading.Thread(target=start_background_tasks, daemon=True).start()
+
+    # Start monitoring unused tasks in the background
+    start_task_monitor()
 
     speak("Hello, how can I assist you today?")
     while True:
@@ -47,20 +50,17 @@ def main():
             if "at" in words:
                 time_index = words.index("at") + 1
                 if time_index < len(words):
-                    if len(words) > time_index + 1 and words[time_index+1] in ["am", "pm"]:
-                        time_str = words[time_index] + " " + words[time_index+1]
-                        message = " ".join(words[time_index+2:])
+                    if len(words) > time_index + 1 and words[time_index + 1] in ["am", "pm"]:
+                        time_str = words[time_index] + " " + words[time_index + 1]
+                        message = " ".join(words[time_index + 2:])
                     else:
                         time_str = words[time_index]
-                        message = " ".join(words[time_index+1:])
+                        message = " ".join(words[time_index + 1:])
                     set_reminder(time_str, message)
                 else:
                     speak("Please specify the time for the reminder.")
             else:
                 speak("Please specify the time for the reminder.")
-
-        elif "usage" in command or "system status" in command:
-            speak(f"Current system usage is: {get_system_usage()}")
 
         elif "exit" in command or "stop" in command:
             speak("Goodbye!")
@@ -72,3 +72,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
