@@ -6,3 +6,6 @@ pyautogui
 keyboard
 selenium
 requests
+langdetect
+deep-translator
+pyAudio
