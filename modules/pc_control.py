@@ -1,111 +1,194 @@
 import os
 import subprocess
-import psutil
 import platform
 import difflib
-import threading
+import shutil
 
-installed_apps_cache = {}
+def scan_disk_items(roots, item_type="file"):
+    results = []
+    for root in roots:
+        for dirpath, dirnames, filenames in os.walk(root):
+            if item_type == "folder":
+                for d in dirnames:
+                    results.append(os.path.join(dirpath, d))
+            else:
+                for f in filenames:
+                    results.append(os.path.join(dirpath, f))
+    return results
 
-def scan_installed_apps():
-    apps = {}
-    system = platform.system()
-    if system == "Windows":
-        directories = [os.environ.get("ProgramFiles", "C:\\Program Files"),
-                       os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
-                       os.path.expanduser("~\\AppData\\Local\\Programs")]
-        for directory in directories:
-            if os.path.exists(directory):
-                for root, _, files in os.walk(directory):
-                    for file in files:
-                        if file.lower().endswith(".exe"):
-                            name = os.path.splitext(file)[0].lower()
-                            full_path = os.path.join(root, file)
-                            apps[name] = full_path
-    elif system == "Darwin":
-        directory = "/Applications"
-        if os.path.exists(directory):
-            for file in os.listdir(directory):
-                if file.lower().endswith(".app"):
-                    name = file.lower().replace(".app", "")
-                    full_path = os.path.join(directory, file)
-                    apps[name] = full_path
-    else:
-        directories = ["/usr/bin", "/usr/local/bin"]
-        for directory in directories:
-            if os.path.exists(directory):
-                for file in os.listdir(directory):
-                    full_path = os.path.join(directory, file)
-                    if os.access(full_path, os.X_OK):
-                        apps[file.lower()] = full_path
-    return apps
-
-def update_installed_apps_cache():
-    global installed_apps_cache
-    installed_apps_cache = scan_installed_apps()
-    print(f"[PC Control] Found {len(installed_apps_cache)} applications.")
-
-update_installed_apps_cache()
-
-def find_app(query):
-    if not installed_apps_cache:
-        update_installed_apps_cache()
-    query = query.lower().strip()
-    app_names = list(installed_apps_cache.keys())
-    matches = difflib.get_close_matches(query, app_names, n=1, cutoff=0.6)
+def find_best_match(query, items, cutoff=0.5):
+    if not items:
+        return None
+    basenames = [os.path.basename(i).lower() for i in items]
+    matches = difflib.get_close_matches(query.lower(), basenames, n=1, cutoff=cutoff)
     if matches:
-        best_match = matches[0]
-        return installed_apps_cache.get(best_match)
+        for item in items:
+            if os.path.basename(item).lower() == matches[0]:
+                return item
     return None
 
-def open_app(app_query):
-    path = find_app(app_query)
-    if path:
-        system = platform.system()
-        print(f"[PC Control] Opening application: {path}")
-        try:
-            if system == "Windows":
-                os.system(f'start "" "{path}"')
-            elif system == "Darwin":
-                os.system(f"open '{path}'")
-            else:
-                subprocess.Popen([path])
-        except Exception as e:
-            print(f"[PC Control] Error opening app: {e}")
-    else:
-        print(f"[PC Control] No application found matching '{app_query}'.")
-
-def close_app(app_query):
+def open_app(query):
     system = platform.system()
-    running = [proc.info['name'] for proc in psutil.process_iter(attrs=['name'])]
-    best_match = difflib.get_close_matches(app_query.lower(), [r.lower() for r in running], n=1, cutoff=0.6)
-    if best_match:
-        process_name = best_match[0]
-        print(f"[PC Control] Closing process: {process_name}")
+    if system == "Windows":
+        roots = [os.environ.get("ProgramFiles", "C:\\Program Files"), os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), os.path.expanduser("~\\AppData\\Local\\Programs")]
+    elif system == "Darwin":
+        roots = ["/Applications"]
+    else:
+        roots = ["/usr/bin", "/usr/local/bin"]
+    items = []
+    for r in roots:
+        if os.path.exists(r):
+            items.extend(scan_disk_items([r], item_type="file"))
+    best = find_best_match(query, items)
+    if best:
         try:
             if system == "Windows":
-                os.system(f"taskkill /f /im {process_name}")
+                os.startfile(best)
+            elif system == "Darwin":
+                subprocess.Popen(["open", best])
             else:
-                os.system(f"pkill -f {process_name}")
+                subprocess.Popen([best])
+            return best
         except Exception as e:
-            print(f"[PC Control] Error closing app: {e}")
+            print(f"Error opening app: {e}")
     else:
-        print(f"[PC Control] No running process found matching '{app_query}'.")
+        print(f"No application found matching '{query}'.")
+    return None
 
-def list_processes():
-    processes = []
-    for proc in psutil.process_iter(attrs=['pid', 'name']):
+def open_folder(query):
+    system = platform.system()
+    if system == "Windows":
+        roots = [os.path.expanduser("~")]
+    elif system == "Darwin":
+        roots = ["/Users", os.path.expanduser("~")]
+    else:
+        roots = ["/"]
+    items = []
+    for r in roots:
+        if os.path.exists(r):
+            items.extend(scan_disk_items([r], item_type="folder"))
+    best = find_best_match(query, items)
+    if best:
         try:
-            processes.append(proc.info)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return processes
+            if system == "Windows":
+                os.startfile(best)
+            elif system == "Darwin":
+                subprocess.Popen(["open", best])
+            else:
+                subprocess.Popen(["xdg-open", best])
+            return best
+        except Exception as e:
+            print(f"Error opening folder: {e}")
+    else:
+        print(f"No folder found matching '{query}'.")
+    return None
 
-def kill_process(app_query):
-    for proc in psutil.process_iter(attrs=['pid', 'name']):
+def open_file(query):
+    system = platform.system()
+    if system == "Windows":
+        roots = [os.path.expanduser("~")]
+    elif system == "Darwin":
+        roots = ["/Users", os.path.expanduser("~")]
+    else:
+        roots = ["/"]
+    items = []
+    for r in roots:
+        if os.path.exists(r):
+            items.extend(scan_disk_items([r], item_type="file"))
+    best = find_best_match(query, items)
+    if best:
         try:
-            if app_query.lower() in proc.info['name'].lower():
-                proc.kill()
-                print(f"[PC Control] Killed process: {proc.info}")
-        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-            print(f"[PC Control] Error killing process: {e}")
+            if system == "Windows":
+                os.startfile(best)
+            elif system == "Darwin":
+                subprocess.Popen(["open", best])
+            else:
+                subprocess.Popen(["xdg-open", best])
+            return best
+        except Exception as e:
+            print(f"Error opening file: {e}")
+    else:
+        print(f"No file found matching '{query}'.")
+    return None
+
+def rename_item(query, new_name, item_type="file"):
+    system = platform.system()
+    if system == "Windows":
+        roots = [os.path.expanduser("~")]
+    elif system == "Darwin":
+        roots = ["/Users", os.path.expanduser("~")]
+    else:
+        roots = ["/"]
+    items = []
+    for r in roots:
+        if os.path.exists(r):
+            items.extend(scan_disk_items([r], item_type=item_type))
+    best = find_best_match(query, items)
+    if best:
+        new_path = os.path.join(os.path.dirname(best), new_name)
+        try:
+            os.rename(best, new_path)
+            return new_path
+        except Exception as e:
+            print(f"Error renaming item: {e}")
+    else:
+        print(f"No {item_type} found matching '{query}' for renaming.")
+    return None
+
+def delete_item(query, item_type="file"):
+    system = platform.system()
+    if system == "Windows":
+        roots = [os.path.expanduser("~")]
+    elif system == "Darwin":
+        roots = ["/Users", os.path.expanduser("~")]
+    else:
+        roots = ["/"]
+    items = []
+    for r in roots:
+        if os.path.exists(r):
+            items.extend(scan_disk_items([r], item_type=item_type))
+    best = find_best_match(query, items)
+    if best:
+        try:
+            if item_type == "folder":
+                shutil.rmtree(best)
+            else:
+                os.remove(best)
+            return best
+        except Exception as e:
+            print(f"Error deleting item: {e}")
+    else:
+        print(f"No {item_type} found matching '{query}' for deletion.")
+    return None
+
+def copy_item(query, dest_folder, item_type="file"):
+    system = platform.system()
+    if system == "Windows":
+        roots = [os.path.expanduser("~")]
+    elif system == "Darwin":
+        roots = ["/Users", os.path.expanduser("~")]
+    else:
+        roots = ["/"]
+    items = []
+    for r in roots:
+        if os.path.exists(r):
+            items.extend(scan_disk_items([r], item_type=item_type))
+    best = find_best_match(query, items)
+    if best:
+        dest_path = os.path.join(dest_folder, os.path.basename(best))
+        try:
+            if item_type == "folder":
+                shutil.copytree(best, dest_path)
+            else:
+                shutil.copy2(best, dest_path)
+            return dest_path
+        except Exception as e:
+            print(f"Error copying item: {e}")
+    else:
+        print(f"No {item_type} found matching '{query}' for copying.")
+    return None
+def close_app(app_name):
+    """Closes the application by its name."""
+    import os
+    os.system(f"taskkill /f /im {app_name}.exe")
+
