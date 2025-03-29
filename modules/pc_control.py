@@ -1,194 +1,98 @@
 import os
 import subprocess
+import psutil
 import platform
 import difflib
-import shutil
+import speech_recognition as sr
+import threading
 
-def scan_disk_items(roots, item_type="file"):
-    results = []
-    for root in roots:
-        for dirpath, dirnames, filenames in os.walk(root):
-            if item_type == "folder":
-                for d in dirnames:
-                    results.append(os.path.join(dirpath, d))
-            else:
-                for f in filenames:
-                    results.append(os.path.join(dirpath, f))
-    return results
+installed_apps_cache = {}
 
-def find_best_match(query, items, cutoff=0.5):
-    if not items:
-        return None
-    basenames = [os.path.basename(i).lower() for i in items]
-    matches = difflib.get_close_matches(query.lower(), basenames, n=1, cutoff=cutoff)
+def scan_installed_apps():
+    apps = {}
+    system = platform.system()
+    if system == "Windows":
+        directories = [os.environ.get("ProgramFiles", "C:\\Program Files"),
+                       os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                       os.path.expanduser("~\\AppData\\Local\\Programs")]
+        for directory in directories:
+            if os.path.exists(directory):
+                for root, _, files in os.walk(directory):
+                    for file in files:
+                        if file.lower().endswith(".exe"):
+                            name = os.path.splitext(file)[0].lower()
+                            full_path = os.path.join(root, file)
+                            apps[name] = full_path
+    elif system == "Darwin":
+        directory = "/Applications"
+        if os.path.exists(directory):
+            for file in os.listdir(directory):
+                if file.lower().endswith(".app"):
+                    name = file.lower().replace(".app", "")
+                    full_path = os.path.join(directory, file)
+                    apps[name] = full_path
+    else:
+        directories = ["/usr/bin", "/usr/local/bin"]
+        for directory in directories:
+            if os.path.exists(directory):
+                for file in os.listdir(directory):
+                    full_path = os.path.join(directory, file)
+                    if os.access(full_path, os.X_OK):
+                        apps[file.lower()] = full_path
+    return apps
+
+def update_installed_apps_cache():
+    global installed_apps_cache
+    installed_apps_cache = scan_installed_apps()
+    print(f"[PC Control] Found {len(installed_apps_cache)} applications.")
+
+def find_app(query):
+    if not installed_apps_cache:
+        update_installed_apps_cache()
+    query = query.lower().strip()
+    app_names = list(installed_apps_cache.keys())
+    matches = difflib.get_close_matches(query, app_names, n=1, cutoff=0.6)
     if matches:
-        for item in items:
-            if os.path.basename(item).lower() == matches[0]:
-                return item
+        return installed_apps_cache.get(matches[0])
     return None
 
-def open_app(query):
-    system = platform.system()
-    if system == "Windows":
-        roots = [os.environ.get("ProgramFiles", "C:\\Program Files"), os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), os.path.expanduser("~\\AppData\\Local\\Programs")]
-    elif system == "Darwin":
-        roots = ["/Applications"]
-    else:
-        roots = ["/usr/bin", "/usr/local/bin"]
-    items = []
-    for r in roots:
-        if os.path.exists(r):
-            items.extend(scan_disk_items([r], item_type="file"))
-    best = find_best_match(query, items)
-    if best:
+def open_apps(app_queries):
+    for app_query in app_queries:
+        path = find_app(app_query)
+        if path:
+            print(f"[PC Control] Opening application: {path}")
+            try:
+                if platform.system() == "Windows":
+                    os.system(f'start "" "{path}"')
+                elif platform.system() == "Darwin":
+                    os.system(f"open '{path}'")
+                else:
+                    subprocess.Popen([path])
+            except Exception as e:
+                print(f"[PC Control] Error opening app: {e}")
+        else:
+            print(f"[PC Control] No application found matching '{app_query}'.")
+
+def recognize_speech():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("Listening for app commands...")
         try:
-            if system == "Windows":
-                os.startfile(best)
-            elif system == "Darwin":
-                subprocess.Popen(["open", best])
-            else:
-                subprocess.Popen([best])
-            return best
-        except Exception as e:
-            print(f"Error opening app: {e}")
-    else:
-        print(f"No application found matching '{query}'.")
-    return None
+            audio = recognizer.listen(source)
+            command = recognizer.recognize_google(audio).lower()
+            print(f"User said: {command}")
+            if "open" in command:
+                app_names = command.replace("open", "").strip().split(" and ")
+                open_apps(app_names)
+        except sr.UnknownValueError:
+            print("Sorry, I couldn't understand that.")
+        except sr.RequestError:
+            print("Speech recognition service is down.")
 
-def open_folder(query):
-    system = platform.system()
-    if system == "Windows":
-        roots = [os.path.expanduser("~")]
-    elif system == "Darwin":
-        roots = ["/Users", os.path.expanduser("~")]
-    else:
-        roots = ["/"]
-    items = []
-    for r in roots:
-        if os.path.exists(r):
-            items.extend(scan_disk_items([r], item_type="folder"))
-    best = find_best_match(query, items)
-    if best:
-        try:
-            if system == "Windows":
-                os.startfile(best)
-            elif system == "Darwin":
-                subprocess.Popen(["open", best])
-            else:
-                subprocess.Popen(["xdg-open", best])
-            return best
-        except Exception as e:
-            print(f"Error opening folder: {e}")
-    else:
-        print(f"No folder found matching '{query}'.")
-    return None
+def continuous_listening():
+    while True:
+        recognize_speech()
 
-def open_file(query):
-    system = platform.system()
-    if system == "Windows":
-        roots = [os.path.expanduser("~")]
-    elif system == "Darwin":
-        roots = ["/Users", os.path.expanduser("~")]
-    else:
-        roots = ["/"]
-    items = []
-    for r in roots:
-        if os.path.exists(r):
-            items.extend(scan_disk_items([r], item_type="file"))
-    best = find_best_match(query, items)
-    if best:
-        try:
-            if system == "Windows":
-                os.startfile(best)
-            elif system == "Darwin":
-                subprocess.Popen(["open", best])
-            else:
-                subprocess.Popen(["xdg-open", best])
-            return best
-        except Exception as e:
-            print(f"Error opening file: {e}")
-    else:
-        print(f"No file found matching '{query}'.")
-    return None
-
-def rename_item(query, new_name, item_type="file"):
-    system = platform.system()
-    if system == "Windows":
-        roots = [os.path.expanduser("~")]
-    elif system == "Darwin":
-        roots = ["/Users", os.path.expanduser("~")]
-    else:
-        roots = ["/"]
-    items = []
-    for r in roots:
-        if os.path.exists(r):
-            items.extend(scan_disk_items([r], item_type=item_type))
-    best = find_best_match(query, items)
-    if best:
-        new_path = os.path.join(os.path.dirname(best), new_name)
-        try:
-            os.rename(best, new_path)
-            return new_path
-        except Exception as e:
-            print(f"Error renaming item: {e}")
-    else:
-        print(f"No {item_type} found matching '{query}' for renaming.")
-    return None
-
-def delete_item(query, item_type="file"):
-    system = platform.system()
-    if system == "Windows":
-        roots = [os.path.expanduser("~")]
-    elif system == "Darwin":
-        roots = ["/Users", os.path.expanduser("~")]
-    else:
-        roots = ["/"]
-    items = []
-    for r in roots:
-        if os.path.exists(r):
-            items.extend(scan_disk_items([r], item_type=item_type))
-    best = find_best_match(query, items)
-    if best:
-        try:
-            if item_type == "folder":
-                shutil.rmtree(best)
-            else:
-                os.remove(best)
-            return best
-        except Exception as e:
-            print(f"Error deleting item: {e}")
-    else:
-        print(f"No {item_type} found matching '{query}' for deletion.")
-    return None
-
-def copy_item(query, dest_folder, item_type="file"):
-    system = platform.system()
-    if system == "Windows":
-        roots = [os.path.expanduser("~")]
-    elif system == "Darwin":
-        roots = ["/Users", os.path.expanduser("~")]
-    else:
-        roots = ["/"]
-    items = []
-    for r in roots:
-        if os.path.exists(r):
-            items.extend(scan_disk_items([r], item_type=item_type))
-    best = find_best_match(query, items)
-    if best:
-        dest_path = os.path.join(dest_folder, os.path.basename(best))
-        try:
-            if item_type == "folder":
-                shutil.copytree(best, dest_path)
-            else:
-                shutil.copy2(best, dest_path)
-            return dest_path
-        except Exception as e:
-            print(f"Error copying item: {e}")
-    else:
-        print(f"No {item_type} found matching '{query}' for copying.")
-    return None
-def close_app(app_name):
-    """Closes the application by its name."""
-    import os
-    os.system(f"taskkill /f /im {app_name}.exe")
-
+if __name__ == "__main__":
+    update_installed_apps_cache()
+    threading.Thread(target=continuous_listening, daemon=True).start()
