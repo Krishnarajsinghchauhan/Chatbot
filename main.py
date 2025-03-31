@@ -1,6 +1,6 @@
 from modules.ai_chat import chat_with_ai
 from modules.speech import listen, speak
-from modules.pc_control import open_apps
+from modules.pc_control import open_app, close_app
 from modules.browser import search_google
 from modules.background_tasks import start_background_tasks, set_reminder, load_reminders, save_reminders, start_task_monitor
 from modules.brain import process_memory_input, answer_memory_query
@@ -34,11 +34,11 @@ def main():
         # PC Control commands
         if "open" in command:
             app_name = command.replace("open ", "")
-            open_apps(app_name)
+            open_app(app_name)
 
         elif "close" in command:
             app_name = command.replace("close ", "")
-            close_apps(app_name)
+            close_app(app_name)
 
         # Web search command
         elif "search" in command:
